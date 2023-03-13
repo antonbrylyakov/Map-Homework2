@@ -28,7 +28,7 @@ void vectorSum(std::vector<int>& v1, std::vector<int>& v2, std::vector<int>& res
 		throw std::invalid_argument("Длина выходного вектора должна быть не менее длины входных векторов");
 	}
 
-	auto claculatePart = [&v1, &v2, &result, threadCount](size_t start, size_t end)
+	auto claculatePart = [&v1, &v2, &result](size_t start, size_t end)
 	{
 		for (auto i = start; i < end; ++i)
 		{
