@@ -102,7 +102,7 @@ int main()
 			std::vector<int> v2(sz);
 			std::vector<int> result(sz);
 			std::mt19937 gen(std::chrono::steady_clock::now().time_since_epoch().count());
-			std::uniform_int_distribution<int> dis(0, sz);
+			std::uniform_int_distribution<int> dis(0, 1000);
 			auto rand_num([&dis, &gen]() mutable { return dis(gen); });
 			std::generate(v1.begin(), v1.end(), rand_num);
 			gen = std::mt19937(std::chrono::steady_clock::now().time_since_epoch().count());
