@@ -8,10 +8,11 @@
 #include <stdexcept>
 #include <mutex>
 #include <random>
+#include <iomanip>
+#include "Measurements.hpp"
 
 
-
-void vectorSum(std::vector<int>& v1, std::vector<int>& v2, std::vector<int>& result, int threadCount = 1)
+void vectorSum(std::once_flag& ofl, std::vector<int>& v1, std::vector<int>& v2, std::vector<int>& result, int threadCount = 1, bool useMainThread = true)
 {
 	if (threadCount <= 0)
 	{
@@ -28,8 +29,10 @@ void vectorSum(std::vector<int>& v1, std::vector<int>& v2, std::vector<int>& res
 		throw std::invalid_argument("Длина выходного вектора должна быть не менее длины входных векторов");
 	}
 
-	auto claculatePart = [&v1, &v2, &result](size_t start, size_t end)
+	auto claculatePart = [&v1, &v2, &result, &ofl](size_t start, size_t end)
 	{
+		std::call_once(ofl, []() { std::cout << "Количество аппаратных ядер - " << std::thread::hardware_concurrency() << std::endl << std::endl; });
+
 		for (auto i = start; i < end; ++i)
 		{
 			result[i] = v1[i] + v2[i];
@@ -54,7 +57,7 @@ void vectorSum(std::vector<int>& v1, std::vector<int>& v2, std::vector<int>& res
 			++endIndex;
 		}
 
-		if (i < threadCount - 1)
+		if (i < threadCount - 1 && !useMainThread)
 		{
 			tv.emplace_back(claculatePart, startIndex, endIndex);
 			startIndex = endIndex;
@@ -72,6 +75,16 @@ void vectorSum(std::vector<int>& v1, std::vector<int>& v2, std::vector<int>& res
 	}
 }
 
+// Заполняет вектор случайными значениями
+void populateVector(std::vector<int>& v)
+{
+	std::mt19937 gen(std::chrono::steady_clock::now().time_since_epoch().count());
+	std::uniform_int_distribution<int> dis(-100, 100);
+	auto rand_num([&dis, &gen]() mutable { return dis(gen); });
+	std::generate(v.begin(), v.end(), rand_num);
+}
+
+
 int main()
 {
 	setlocale(LC_ALL, "Russian");
@@ -79,11 +92,46 @@ int main()
 	SetConsoleCP(1251);
 #endif
 
-	int threadCounts[] = { 1, 2, 4, 8, 16 };
-	int sizes[] = { 1000, 10000, 100000, 1000000 };
+	std::once_flag ofl;
+	size_t repeatCount = 10;
+	size_t threadCounts[] = { 1, 2, 4, 8, 16 };
+	size_t sizes[] = { 1000, 1'0000, 100'000, 1'000'000 };
+	auto sizesCnt = sizeof(sizes) / sizeof(sizes[0]);
 
-	std::cout << "Количество аппаратных ядер - " << std::thread::hardware_concurrency() << std::endl << std::endl;
+	// создаем структуру данных для сохранения результатов измерений
+	std::vector<MeasurementSet<double>> measurements;
+	for (auto& sz : sizes)
+	{
+		measurements.push_back(MeasurementSet<double>());
+	}
+		
+	for (size_t szn = 0; szn < sizesCnt; ++szn)
+	{
+		auto sz = sizes[szn];
+		for (auto tc : threadCounts)
+		{
+			// Вычисления repeatCount раз
 
+			for (size_t i = 0; i < repeatCount; ++i)
+			{
+				std::vector<int> v1(sz);
+				populateVector(v1);
+				std::vector<int> v2(sz);
+				populateVector(v2);
+
+				std::vector<int> result(sz);
+				auto start = std::chrono::high_resolution_clock::now();
+				vectorSum(ofl, v1, v2, result, tc, false);
+				auto end = std::chrono::high_resolution_clock::now();
+				std::chrono::duration<double, std::milli> time = end - start;
+
+				measurements[szn].add(MeasurementItem<double>{ tc, time.count() });
+			}
+		}
+	}
+
+
+	// Выводим результаты	
 	std::cout << "\t\t";
 	for (auto sz : sizes)
 	{
@@ -95,28 +143,35 @@ int main()
 	for (auto tc : threadCounts)
 	{
 		std::cout << tc << " поток(а,ов)" << "\t";
-		for (auto sz : sizes)
+		for (size_t szn = 0; szn < sizesCnt; ++szn)
 		{
-			// Заполняем вектора случайными данными
-			std::vector<int> v1(sz);
-			std::vector<int> v2(sz);
-			std::vector<int> result(sz);
-			std::mt19937 gen(std::chrono::steady_clock::now().time_since_epoch().count());
-			std::uniform_int_distribution<int> dis(0, 1000);
-			auto rand_num([&dis, &gen]() mutable { return dis(gen); });
-			std::generate(v1.begin(), v1.end(), rand_num);
-			gen = std::mt19937(std::chrono::steady_clock::now().time_since_epoch().count());
-			std::generate(v2.begin(), v2.end(), rand_num);
-
-			// Начинаем вычисления
-
-			auto start = std::chrono::high_resolution_clock::now();
-			vectorSum(v1, v2, result, tc);
-			auto end = std::chrono::high_resolution_clock::now();
-			std::chrono::duration<double> time = end - start;
-			std::cout << time.count() << "s\t";
+			auto sz = sizes[szn];
+			auto avgTime = measurements[szn].get(tc);
+			if (avgTime.has_value())
+			{
+				std::cout << std::fixed << std::setprecision(2) << avgTime.value().value << "ms\t\t";
+			}
+			else
+			{
+				std::cout << "--\t\t";
+			}
 		}
 
 		std::cout << std::endl;
+	}
+
+	std::cout << "Опт. потоков" << "\t";
+
+	for (size_t szn = 0; szn < sizesCnt; ++szn)
+	{
+		auto optimum = measurements[szn].getOptimum();
+		if (optimum.has_value())
+		{
+			std::cout << optimum.value().threadCount << "\t\t";
+		}
+		else
+		{
+			std::cout << "--\t\t";
+		}
 	}
 }
